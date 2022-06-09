@@ -77,16 +77,20 @@ class Learner(nn.Module):
         num_inner_update_step = self.inner_update_step if training else self.inner_update_step_eval
 
         for task_idx, task in enumerate(batch_tasks): # 5번 iterate (= outer_batch_size)
-            # 이 아래: 하나의 task에 대한 것 (support data 80개 존재함)
+            # 이 아래: 하나의 task에 대한 것 (support data 2*80개 존재함)
 
-            support = task[0]
-            query   = task[1]
+            support = task[0] # 각 label에 대한 데이터 각각 80개씩 있음 / = pseudocode의 D^tr
+            query   = task[1] # 각 label에 대한 데이터 각각 20개씩 있음
             
             fast_model = deepcopy(self.model)
             fast_model.to(self.device)
             support_dataloader = DataLoader(support, sampler=RandomSampler(support),
                                             batch_size=self.inner_batch_size)
             
+            # C^n implementation: partition data according to class labels
+            C0 = [d for d in support if d[3]==0] # 80개
+            C1 = [d for d in support if d[3]==1] # 80개
+
             inner_optimizer = Adam(fast_model.parameters(), lr=self.inner_update_lr)
             fast_model.train() # sets to train mode
             
@@ -97,7 +101,7 @@ class Learner(nn.Module):
 
             for i in range(0,num_inner_update_step):
                 all_loss = []
-                for inner_step, batch in enumerate(support_dataloader): # 5번 iterate (num_support/inner_batch_size = 80/16 = 5)
+                for inner_step, batch in enumerate(support_dataloader): # 10번 iterate (num_lables*num_support/inner_batch_size = 2*80/16 = 10)
                     
                     batch = tuple(t.to(self.device) for t in batch)
                     input_ids, attention_mask, segment_ids, label_id = batch
