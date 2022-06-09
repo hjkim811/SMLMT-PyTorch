@@ -29,6 +29,8 @@ def get_args():
     # Model
     parser.add_argument("--bert_model", type=str, default="bert-base-uncased")
     parser.add_argument("--num_labels", type=int, default=2)
+    parser.add_argument("--emb_size", type=int, default=256,
+                        help="Label and output embedding size")
     parser.add_argument("--output_dir", type=str, default="results/tmp",
                         help="Directory for saving checkpoint and log file.")
 
@@ -183,6 +185,7 @@ def main():
     ### Sample testing tasks ###
     test_tasks = MetaTask(test_examples,
                           num_task=args.num_test_task,
+                          num_labels=args.num_labels,
                           k_support=args.num_support,
                           k_query=args.num_query,
                           tokenizer=tokenizer,
@@ -197,9 +200,10 @@ def main():
                
         # Build training task set (num_task)
         train_tasks = MetaTask(train_examples,
-                               num_task=args.num_train_task,
-                               k_support=args.num_support,
-                               k_query=args.num_query,
+                               num_task=args.num_train_task, # 50
+                               num_labels=args.num_labels, # 2 (일단은 2만)
+                               k_support=args.num_support, # 80
+                               k_query=args.num_query, # 20
                                tokenizer=tokenizer,
                                testset=False,
                                test_domain=None)
@@ -211,10 +215,10 @@ def main():
         # Each task contains `k_support` + `k_query` examples
         task_batch = create_batch_of_tasks(train_tasks, 
                                            is_shuffle=True,
-                                           batch_size=args.outer_batch_size)
+                                           batch_size=args.outer_batch_size) # default는 4지만 argument는 5
 
-        # meta_batch has shape (batch_size, k_support*k_query)
-        for step, meta_batch in enumerate(task_batch):
+        # meta_batch has shape (batch_size, k_support*k_query) -> k_support+k_query인데 오타인듯
+        for step, meta_batch in enumerate(task_batch): # 10번 iterate (num_task/outer_batch_size = 50/5 = 10)
             acc = learner(meta_batch, training=True)
             logger.info(f"Training batch: {step+1}\ttraining accuracy: {acc}\n")
             

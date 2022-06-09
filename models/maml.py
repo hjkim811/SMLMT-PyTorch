@@ -3,6 +3,7 @@
 
 import logging
 from torch import nn
+import torch.nn as nn # import 충돌 생기려나?
 from torch.nn import functional as F
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 from torch.optim import Adam
@@ -29,6 +30,7 @@ class Learner(nn.Module):
         super(Learner, self).__init__()
         
         self.num_labels = args.num_labels
+        self.emb_size = args.emb_size
         self.outer_batch_size = args.outer_batch_size
         self.inner_batch_size = args.inner_batch_size
         self.outer_update_lr  = args.outer_update_lr
@@ -37,11 +39,27 @@ class Learner(nn.Module):
         self.inner_update_step_eval = args.inner_update_step_eval
         self.gpu_id = args.gpu_id
         self.bert_model = args.bert_model
-        self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
-        
+        # self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cpu')
+
         self.model = BertForSequenceClassification.from_pretrained(self.bert_model, num_labels = self.num_labels)
+        
+        # ψ
+        self.deep_set_encoder = nn.Sequential(
+                                nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
+                                nn.Tanh(),
+                                nn.Linear(self.model.config.hidden_size//2, self.emb_size + 1) # [384, 257]
+                                ) # 마지막에 tanh 또 넣어야 하나?
+
+        # ф
+        self.mlp = nn.Sequential(
+                    nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
+                    nn.Tanh(),
+                    nn.Linear(self.model.config.hidden_size//2, self.emb_size) # [384, 256]
+                    ) # 마지막에 tanh 또 넣어야 하나?
+
         self.outer_optimizer = Adam(self.model.parameters(), lr=self.outer_update_lr)
-        self.model.train()
+        self.model.train() # sets to train mode
 
     def forward(self, batch_tasks, training=True):
         """Perform first-order approximation MAML.
@@ -58,7 +76,9 @@ class Learner(nn.Module):
         num_task = len(batch_tasks)
         num_inner_update_step = self.inner_update_step if training else self.inner_update_step_eval
 
-        for task_idx, task in enumerate(batch_tasks):
+        for task_idx, task in enumerate(batch_tasks): # 5번 iterate (= outer_batch_size)
+            # 이 아래: 하나의 task에 대한 것 (support data 80개 존재함)
+
             support = task[0]
             query   = task[1]
             
@@ -68,7 +88,7 @@ class Learner(nn.Module):
                                             batch_size=self.inner_batch_size)
             
             inner_optimizer = Adam(fast_model.parameters(), lr=self.inner_update_lr)
-            fast_model.train()
+            fast_model.train() # sets to train mode
             
             if training:
                 logger.info(f"--- Training Task {task_idx+1} ---")
@@ -77,10 +97,14 @@ class Learner(nn.Module):
 
             for i in range(0,num_inner_update_step):
                 all_loss = []
-                for inner_step, batch in enumerate(support_dataloader):
+                for inner_step, batch in enumerate(support_dataloader): # 5번 iterate (num_support/inner_batch_size = 80/16 = 5)
                     
                     batch = tuple(t.to(self.device) for t in batch)
                     input_ids, attention_mask, segment_ids, label_id = batch
+                    # print('input_ids:', input_ids.shape) # [16, 256]
+                    # print('label_id:', label_id.shape) # [16]
+                    # print(label_id) # 2종류: 0, 1
+                    # print()
                     outputs = fast_model(input_ids, attention_mask, segment_ids, labels = label_id)
                     
                     loss = outputs[0]              

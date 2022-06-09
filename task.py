@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset
 LABEL_MAP  = {'positive':0, 'negative':1, 0:'positive', 1:'negative'}
 
 class MetaTask(Dataset):
-    def __init__(self, examples, num_task, k_support, k_query, tokenizer, testset, test_domain):
+    def __init__(self, examples, num_task, num_labels, k_support, k_query, tokenizer, testset, test_domain):
         """
 
         Args:
@@ -28,6 +28,7 @@ class MetaTask(Dataset):
         """
         self.examples = examples
         self.num_task = num_task
+        self.num_labels = num_labels
         self.k_support = k_support
         self.k_query = k_query
         self.tokenizer = tokenizer
@@ -35,15 +36,41 @@ class MetaTask(Dataset):
         self.test_domain = test_domain
         self.max_seq_length = 256
 
-        self.create_batch(self.num_task, self.testset, self.test_domain)
+        self.create_batch(self.num_task, self.num_labels, self.testset, self.test_domain)
 
-    def create_batch(self, num_task, testset, test_domain):
+    # 수정완료: 각 label에 대해 k_support + k_query개만큼 균등하게 sampling하도록
+    def create_batch(self, num_task, num_labels, testset, test_domain):
         # support set: (k_support, 3)
         # query set: (k_query, 3)
         self.supports = list()
         self.queries = list()
 
         if testset is True:
+            # else인 경우와 마찬가지로 수정했으나 test data는 domain별로 100개씩 있어서 AssertionError 에러 발생함 (200 <= 100)
+            '''
+            for domain in test_domain:
+                domainExamples = [exm for exm in self.examples if exm["domain"] == domain]
+            
+                assert (num_labels*(self.k_support+self.k_query)) <= len(domainExamples)
+
+                label1Examples = [e for e in domainExamples if e['label'] == 'positive']
+                label2Examples = [e for e in domainExamples if e['label'] == 'negative']
+
+                label1_support_examples = random.sample(label1Examples,self.k_support)
+                label1_query_examples = random.sample(label1Examples,self.k_query)
+                label2_support_examples = random.sample(label2Examples,self.k_support)
+                label2_query_examples = random.sample(label2Examples,self.k_query) 
+
+                support_examples = label1_support_examples + label2_support_examples # length: num_labels * k_support
+                query_examples = label1_query_examples + label2_query_examples # length: num_labels * k_query                                               
+
+                random.shuffle(support_examples)
+                random.shuffle(query_examples)
+           
+                self.supports.append(support_examples)
+                self.queries.append(query_examples)
+            '''
+
             for domain in test_domain:
                 domain_examples = [exm for exm in self.examples if exm["domain"]==domain]
             
@@ -53,21 +80,30 @@ class MetaTask(Dataset):
                 
                 self.supports.append(domain_train)
                 self.queries.append(domain_test)
+                
         else:
             for b in range(num_task):  # for each task
                 # 1.select domain randomly
-
                 domain = random.choice(self.examples)['domain']
                 domainExamples = [e for e in self.examples if e['domain'] == domain]
+
+                label1Examples = [e for e in domainExamples if e['label'] == 'positive']
+                label2Examples = [e for e in domainExamples if e['label'] == 'negative']
             
-                # 1.select k_support + k_query examples from domain randomly
-                selected_examples = random.sample(domainExamples,self.k_support + self.k_query)
-                random.shuffle(selected_examples)
-                exam_train = selected_examples[:self.k_support]
-                exam_test  = selected_examples[self.k_support:] 
+                # 2.select k_support + k_query examples from domain randomly (각 label의 example에 대해)
+                label1_support_examples = random.sample(label1Examples,self.k_support)
+                label1_query_examples = random.sample(label1Examples,self.k_query)
+                label2_support_examples = random.sample(label2Examples,self.k_support)
+                label2_query_examples = random.sample(label2Examples,self.k_query)
+
+                support_examples = label1_support_examples + label2_support_examples # length: num_labels * k_support
+                query_examples = label1_query_examples + label2_query_examples # length: num_labels * k_query
+
+                random.shuffle(support_examples)
+                random.shuffle(query_examples)
            
-                self.supports.append(exam_train)
-                self.queries.append(exam_test)
+                self.supports.append(support_examples)
+                self.queries.append(query_examples)
 
     def create_feature_set(self,examples):
         all_input_ids      = torch.empty(len(examples), self.max_seq_length, dtype = torch.long)
