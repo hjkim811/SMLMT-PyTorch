@@ -51,13 +51,6 @@ class Learner(nn.Module):
                                 nn.Linear(self.model.config.hidden_size//2, self.emb_size + 1) # [384, 257]
                                 ) # 마지막에 tanh 또 넣어야 하나?
 
-        # ф
-        self.mlp = nn.Sequential(
-                    nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
-                    nn.Tanh(),
-                    nn.Linear(self.model.config.hidden_size//2, self.emb_size) # [384, 256]
-                    ) # 마지막에 tanh 또 넣어야 하나?
-
         self.outer_optimizer = Adam(self.model.parameters(), lr=self.outer_update_lr)
         self.model.train() # sets to train mode
 
@@ -82,14 +75,53 @@ class Learner(nn.Module):
             support = task[0] # 각 label에 대한 데이터 각각 80개씩 있음 / = pseudocode의 D^tr
             query   = task[1] # 각 label에 대한 데이터 각각 20개씩 있음
             
-            fast_model = deepcopy(self.model)
-            fast_model.to(self.device)
             support_dataloader = DataLoader(support, sampler=RandomSampler(support),
                                             batch_size=self.inner_batch_size)
             
             # C^n implementation: partition data according to class labels
             C0 = [d for d in support if d[3]==0] # 80개
             C1 = [d for d in support if d[3]==1] # 80개
+
+            # softmax parameter generation에 first batch만 사용한다는거 무시하고 일단 80개 다 사용
+            C0_dataloader = DataLoader(C0, sampler=RandomSampler(C0), batch_size=1) 
+            C1_dataloader = DataLoader(C1, sampler=RandomSampler(C1), batch_size=1) 
+            C0_softmax_param = torch.zeros(self.emb_size + 1) # [257]
+            C1_softmax_param = torch.zeros(self.emb_size + 1) # [257]
+
+            for batch in C0_dataloader: # 80번 iterate
+                batch = tuple(t.to(self.device) for t in batch)
+                input_ids, attention_mask, segment_ids, _ = batch # label은 제외
+                outputs = self.model(input_ids, attention_mask, segment_ids, output_hidden_states=True)
+                deep_input = outputs[1][-1][0,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
+                C0_softmax_param += self.deep_set_encoder(deep_input)
+            C0_softmax_param /= len(C0_dataloader)       
+
+            for batch in C1_dataloader: # 80번 iterate
+                batch = tuple(t.to(self.device) for t in batch)
+                input_ids, attention_mask, segment_ids, _ = batch # label은 제외
+                outputs = self.model(input_ids, attention_mask, segment_ids, output_hidden_states=True)
+                deep_input = outputs[1][-1][0,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
+                C1_softmax_param += self.deep_set_encoder(deep_input)
+            C1_softmax_param /= len(C1_dataloader)
+
+            softmax_linear = torch.transpose(torch.stack((C0_softmax_param[:-1], C1_softmax_param[:-1])), 0, 1) # [256, 2]
+            softmax_bias = torch.transpose(torch.stack((C0_softmax_param[-1:], C1_softmax_param[-1:])), 0, 1) # [1, 2]
+
+            # 밑 두줄 나중에 삭제하기
+            fast_model = deepcopy(self.model)
+            fast_model.to(self.device)
+
+            # initialize task-specific parameters
+            task_weights = {}
+            task_weights['bert'] = deepcopy(self.model) # deepcopy 해도 되나?
+            task_weights['mlp'] = nn.Sequential(
+                                    nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
+                                    nn.Tanh(),
+                                    nn.Linear(self.model.config.hidden_size//2, self.emb_size) # [384, 256]
+                                    ) # ф / 마지막에 tanh 또 넣어야 하나? / initialize 어떻게?
+            task_weights['W'] = softmax_linear
+            task_weights['b'] = softmax_bias
+
 
             inner_optimizer = Adam(fast_model.parameters(), lr=self.inner_update_lr)
             fast_model.train() # sets to train mode
@@ -105,10 +137,6 @@ class Learner(nn.Module):
                     
                     batch = tuple(t.to(self.device) for t in batch)
                     input_ids, attention_mask, segment_ids, label_id = batch
-                    # print('input_ids:', input_ids.shape) # [16, 256]
-                    # print('label_id:', label_id.shape) # [16]
-                    # print(label_id) # 2종류: 0, 1
-                    # print()
                     outputs = fast_model(input_ids, attention_mask, segment_ids, labels = label_id)
                     
                     loss = outputs[0]              

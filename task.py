@@ -80,7 +80,7 @@ class MetaTask(Dataset):
                 
                 self.supports.append(domain_train)
                 self.queries.append(domain_test)
-                
+
         else:
             for b in range(num_task):  # for each task
                 # 1.select domain randomly
