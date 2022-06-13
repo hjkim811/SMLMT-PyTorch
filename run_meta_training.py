@@ -161,6 +161,7 @@ def main():
     logger.addHandler(console)
     
     logger.info(args)
+    
     # Saving arguments
     write_path = get_output_dir(output_dir, 'hyparams.txt')
     with open(write_path, 'w') as f:
