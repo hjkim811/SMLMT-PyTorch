@@ -42,6 +42,7 @@ class Learner(nn.Module):
         self.loss = nn.CrossEntropyLoss()
         self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         # self.device = torch.device('cpu')
+        self.device_sub = torch.device(f'cuda:2' if torch.cuda.is_available() else 'cpu')
 
         self.model = BertForSequenceClassification.from_pretrained(self.bert_model, num_labels = self.num_labels)
         
@@ -51,6 +52,7 @@ class Learner(nn.Module):
                                 nn.Tanh(),
                                 nn.Linear(self.model.config.hidden_size//2, self.emb_size + 1) # [384, 257]
                                 ) # 마지막에 tanh 또 넣어야 하나?
+        self.deep_set_encoder.train()
 
         self.outer_optimizer = Adam(self.model.parameters(), lr=self.outer_update_lr)
         self.model.train() # sets to train mode
@@ -99,27 +101,30 @@ class Learner(nn.Module):
                                     nn.Tanh(),
                                     nn.Linear(self.model.config.hidden_size//2, self.emb_size) # [384, 256]
                                     ) # ф / 마지막에 tanh 또 넣어야 하나? / initialize 어떻게?
-            logger.info('task-specific parameters initialized')            
+            logger.info('task-specific parameters initialized')
+
+            # Multi-GPU 사용할 때
+            # task_weights['bert'] = nn.DataParallel(task_weights['bert'])
+            # self.deep_set_encoder = nn.DataParallel(self.deep_set_encoder)
+
 
             for key in task_weights.keys():
-                task_weights[key].to(self.device)
-            self.deep_set_encoder.to(self.device)
+                task_weights[key].to(self.device_sub)
+            self.deep_set_encoder.to(self.device_sub)
 
-            for batch in C0_dataloader: # 1번 iterate
-                batch = tuple(t.to(self.device) for t in batch)
-                input_ids, attention_mask, segment_ids, _ = batch # label은 제외
-                outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
-                deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
-                C0_output = self.deep_set_encoder(deep_input)
-            C0_output = torch.mean(C0_output, 0)   
+            batch = iter(C0_dataloader).next()
+            batch = tuple(t.to(self.device_sub) for t in batch)
+            input_ids, attention_mask, segment_ids, _ = batch # label은 제외
+            outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
+            deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
+            C0_output = torch.mean(self.deep_set_encoder(deep_input), 0)   
 
-            for batch in C1_dataloader: # 1번 iterate
-                batch = tuple(t.to(self.device) for t in batch)
-                input_ids, attention_mask, segment_ids, _ = batch # label은 제외
-                outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
-                deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
-                C1_output = self.deep_set_encoder(deep_input)
-            C1_output = torch.mean(C1_output, 0) 
+            batch = iter(C1_dataloader).next()
+            batch = tuple(t.to(self.device_sub) for t in batch)
+            input_ids, attention_mask, segment_ids, _ = batch # label은 제외
+            outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
+            deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
+            C1_output = torch.mean(self.deep_set_encoder(deep_input), 0) 
 
             generated_weight = torch.stack((C0_output[:-1], C1_output[:-1])) # [2, 256]
             generated_bias = torch.cat((C0_output[-1:], C1_output[-1:])) # [2]
@@ -129,12 +134,17 @@ class Learner(nn.Module):
 
             # add generated parameters to task-specific parameter
             task_weights['gen'] = generated_linear # [256, 2] / softmax는 따로 추가할 필요 x (nn.CrossEntropyLoss()에 이미 포함되어있음)
-            task_weights['gen'].to(self.device)
+            # task_weights['gen'].to(self.device)
+
+            for key in task_weights.keys():
+                task_weights[key].to(self.device)
+            self.deep_set_encoder.to(self.device)
             
             params = list(task_weights['bert'].parameters()) + list(task_weights['mlp'].parameters()) + list(task_weights['gen'].parameters()) # length: 201 + 4 + 2 = 207
             inner_optimizer = Adam(params, lr=self.inner_update_lr) # 나중에 SGD로 바꾸기
 
             # 이거 하기 전부터 이미 train mode인듯 (.training으로 체크)
+            # 다시 해보니 3개중 bert만 False 나옴 (mlp, gen은 True)
             # training = True 아니어도 이거 하는거 맞음?
             for key in task_weights.keys():
                 task_weights[key].train() 
@@ -150,7 +160,7 @@ class Learner(nn.Module):
                         num_params += torch.numel(param)
                         param.requires_grad = False # freeze layer
                 percent = round(num_params/task_weights['bert'].num_parameters()*100, 2)
-                print(f'warp layers freezed ({percent}% of BERT parameters)')                
+                logger.info(f'warp layers freezed ({percent}% of BERT parameters)')                
 
             else:
                 logger.info(f"--- Testing Task {task_idx+1} ---")
@@ -166,7 +176,6 @@ class Learner(nn.Module):
                     mlp_output = task_weights['mlp'](mlp_input) # [16, 256]
                     pred = task_weights['gen'](mlp_output) # [16, 2] / 논문의 p(y|X)
                     loss = self.loss(pred, label_id)
-                    # print('loss:', loss.item())
 
                     loss.backward()
                     inner_optimizer.step()
@@ -176,13 +185,20 @@ class Learner(nn.Module):
                 
                 if i % 4 == 0:
                     logger.info(f"Inner Loss: {np.mean(all_loss)}")
+            
+            # outer update 할 때는 BERT의 모든 layer unfreeze
+            for name, param in task_weights['bert'].named_parameters():
+                param.requires_grad = True
+            logger.info('unfreeze warp layers for outer update')    
 
             query_dataloader = DataLoader(query, sampler=None, batch_size=len(query))
             query_batch = iter(query_dataloader).next()
             query_batch = tuple(t.to(self.device) for t in query_batch)
             q_input_ids, q_attention_mask, q_segment_ids, q_label_id = query_batch
-            q_outputs = fast_model(q_input_ids, q_attention_mask, q_segment_ids, labels = q_label_id)
-            
+            q_mlp_input = task_weights['bert'](q_input_ids, q_attention_mask, q_segment_ids, output_hidden_states=True)[1][-1][:,0,:]
+            q_mlp_output = task_weights['mlp'](q_mlp_input)
+            q_outputs = task_weights['gen'](q_mlp_output)
+
             # In FOMAML, learner adapts on new task by updating
             # the gradient which is derived from fast model 
             # on queries set.
@@ -213,6 +229,7 @@ class Learner(nn.Module):
                 sum_gradients[i] = sum_gradients[i] / float(num_task)
 
             #Assign gradient for original model, then using optimizer to update its weights
+            # gradient 계산은 task-specific parameter에서 하고 meta parameter 업데이트(계산)할 때는 그 값을 복사해서 사용
             for i, params in enumerate(self.model.parameters()):
                 params.grad = sum_gradients[i]
 
