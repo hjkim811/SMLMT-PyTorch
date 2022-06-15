@@ -5,8 +5,8 @@ import logging
 from torch import nn
 import torch.nn as nn # import 충돌 생기려나?
 from torch.nn import functional as F
-from torch.utils.data import TensorDataset, DataLoader, Subset, RandomSampler
-from torch.optim import Adam
+from torch.utils.data import TensorDataset, DataLoader, Subset, RandomSampler, SubsetRandomSampler
+from torch.optim import Adam, SGD
 from torch.nn import CrossEntropyLoss
 from transformers import BertForSequenceClassification
 from copy import deepcopy
@@ -42,7 +42,7 @@ class Learner(nn.Module):
         self.loss = nn.CrossEntropyLoss()
         self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         # self.device = torch.device('cpu')
-        self.device_sub = torch.device(f'cuda:2' if torch.cuda.is_available() else 'cpu')
+        self.device_sub = torch.device(f'cuda:1' if torch.cuda.is_available() else 'cpu')
 
         self.model = BertForSequenceClassification.from_pretrained(self.bert_model, num_labels = self.num_labels)
         
@@ -68,7 +68,8 @@ class Learner(nn.Module):
         # support = TensorDataset(all_input_ids, all_attention_mask, all_segment_ids, all_label_ids)
         """
         task_accs = []
-        sum_gradients = []
+        sum_gradients_bert = []
+        sum_gradients_dse = [] # deep set encoder
         num_task = len(batch_tasks)
         num_inner_update_step = self.inner_update_step if training else self.inner_update_step_eval
 
@@ -78,24 +79,24 @@ class Learner(nn.Module):
             support = task[0] # 각 label에 대한 데이터 각각 80개씩 있음 / = pseudocode의 D^tr
             query   = task[1] # 각 label에 대한 데이터 각각 20개씩 있음
             
-            support_dataloader = DataLoader(support, sampler=RandomSampler(support),
-                                            batch_size=self.inner_batch_size)
-            
+            support_dataloader = DataLoader(support, sampler=RandomSampler(support), batch_size=self.inner_batch_size)
+
+            # inner loop에서 for loop 하나 없앨 때는 이거 사용하기
+            # support_dataloader = DataLoader(support, sampler=SubsetRandomSampler(list(range(self.inner_batch_size*num_inner_update_step))), batch_size=self.inner_batch_size) 
+            # len = num_inner_update_step
+
             # C^n implementation: partition data according to class labels
             C0 = [d for d in support if d[3]==0] # 80개
             C1 = [d for d in support if d[3]==1] # 80개
 
             # softmax parameter generation에 first batch만 사용함 -> 이걸 위해 16개만 sampling
-            # C0_dataloader = DataLoader(C0, sampler=RandomSampler(C0), batch_size=1) 
-            # C1_dataloader = DataLoader(C1, sampler=RandomSampler(C1), batch_size=1)
-            C0_dataloader = DataLoader(Subset(C0,list(range(self.inner_batch_size))), batch_size=self.inner_batch_size)
-            C1_dataloader = DataLoader(Subset(C1,list(range(self.inner_batch_size))), batch_size=self.inner_batch_size) 
-            # C0_softmax_param = torch.zeros(self.emb_size + 1).to(self.device) # [257]
-            # C1_softmax_param = torch.zeros(self.emb_size + 1).to(self.device) # [257]
-
+            # first batch 중복으로 사용되는 문제 있나? Indices를 바꿔주기?
+            C0_dataloader = DataLoader(C0, sampler=SubsetRandomSampler(list(range(self.inner_batch_size))), batch_size=self.inner_batch_size)
+            C1_dataloader = DataLoader(C1, sampler=SubsetRandomSampler(list(range(self.inner_batch_size))), batch_size=self.inner_batch_size)
+            
             # initialize task-specific parameters
             task_weights = {}
-            task_weights['bert'] = deepcopy(self.model) # deepcopy 해도 되나?
+            task_weights['bert'] = deepcopy(self.model) 
             task_weights['mlp'] = nn.Sequential(
                                     nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
                                     nn.Tanh(),
@@ -107,7 +108,7 @@ class Learner(nn.Module):
             # task_weights['bert'] = nn.DataParallel(task_weights['bert'])
             # self.deep_set_encoder = nn.DataParallel(self.deep_set_encoder)
 
-
+            # unify device for parameter generation
             for key in task_weights.keys():
                 task_weights[key].to(self.device_sub)
             self.deep_set_encoder.to(self.device_sub)
@@ -115,39 +116,39 @@ class Learner(nn.Module):
             batch = iter(C0_dataloader).next()
             batch = tuple(t.to(self.device_sub) for t in batch)
             input_ids, attention_mask, segment_ids, _ = batch # label은 제외
-            outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
+            with torch.no_grad():
+                outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) 
             deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
             C0_output = torch.mean(self.deep_set_encoder(deep_input), 0)   
 
             batch = iter(C1_dataloader).next()
             batch = tuple(t.to(self.device_sub) for t in batch)
             input_ids, attention_mask, segment_ids, _ = batch # label은 제외
-            outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) # 여기서 self.model or task_weights['bert'] 써야?
+            with torch.no_grad():
+                outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) 
             deep_input = outputs[1][-1][:,0,:] # 각 데이터 하나의 마지막 hidden layer의 CLS representation ([768])
             C1_output = torch.mean(self.deep_set_encoder(deep_input), 0) 
 
-            generated_weight = torch.stack((C0_output[:-1], C1_output[:-1])) # [2, 256]
-            generated_bias = torch.cat((C0_output[-1:], C1_output[-1:])) # [2]
-            generated_linear = nn.Linear(256, 2)
-            generated_linear.weight = nn.Parameter(generated_weight)
-            generated_linear.bias = nn.Parameter(generated_bias)
-
             # add generated parameters to task-specific parameter
-            task_weights['gen'] = generated_linear # [256, 2] / softmax는 따로 추가할 필요 x (nn.CrossEntropyLoss()에 이미 포함되어있음)
-            # task_weights['gen'].to(self.device)
+            task_weights['W'] = torch.stack((C0_output[:-1], C1_output[:-1])) # [2, 256]
+            task_weights['b'] = torch.cat((C0_output[-1:], C1_output[-1:])) # [2]
 
-            for key in task_weights.keys():
-                task_weights[key].to(self.device)
-            self.deep_set_encoder.to(self.device)
+            # unify device for inner loop (support set)
+            task_weights['bert'].to(self.device)
+            task_weights['mlp'].to(self.device)
+            task_weights['W'] = task_weights['W'].to(self.device) # tensor는 assign 해줘야
+            task_weights['b'] = task_weights['b'].to(self.device) # tensor는 assign 해줘야
+            self.deep_set_encoder.to(self.device)            
             
-            params = list(task_weights['bert'].parameters()) + list(task_weights['mlp'].parameters()) + list(task_weights['gen'].parameters()) # length: 201 + 4 + 2 = 207
+            # bert와 mlp는 optimizer로 update
+            # W와 b는 수동으로 update (non-leaf tensor이기 때문에 optimizer를 사용할 수 없음)
+            params = list(task_weights['bert'].parameters()) + list(task_weights['mlp'].parameters()) # length: 201 + 4 = 205
             inner_optimizer = Adam(params, lr=self.inner_update_lr) # 나중에 SGD로 바꾸기
 
-            # 이거 하기 전부터 이미 train mode인듯 (.training으로 체크)
-            # 다시 해보니 3개중 bert만 False 나옴 (mlp, gen은 True)
-            # training = True 아니어도 이거 하는거 맞음?
-            for key in task_weights.keys():
-                task_weights[key].train() 
+            # train mode 확인 방법: .training
+            # W와 b는 nn.Module이 아니라 tensor이기 때문에 아래 작업 필요 x
+            task_weights['bert'].train() # train mode: False -> True
+            task_weights['mlp'].train() # train mode: True -> True
             
             if training:
                 logger.info(f"--- Training Task {task_idx+1} ---")
@@ -165,62 +166,113 @@ class Learner(nn.Module):
             else:
                 logger.info(f"--- Testing Task {task_idx+1} ---")
 
-            for i in range(0,num_inner_update_step):
+            # 기존 inner loop
+            for i in range(0,num_inner_update_step): # 이 loop는 빼야 하나?
                 all_loss = []
                 for inner_step, batch in enumerate(support_dataloader): # 10번 iterate (num_lables*num_support/inner_batch_size = 2*80/16 = 10)
                     
+                    task_weights['W'].retain_grad()
+                    task_weights['b'].retain_grad()
+
                     batch = tuple(t.to(self.device) for t in batch)
                     input_ids, attention_mask, segment_ids, label_id = batch
 
                     mlp_input = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [16, 768]
                     mlp_output = task_weights['mlp'](mlp_input) # [16, 256]
-                    pred = task_weights['gen'](mlp_output) # [16, 2] / 논문의 p(y|X)
+                    pred = torch.matmul(mlp_output, torch.transpose(task_weights['W'],0,1)) + task_weights['b'] # [16, 2] / 논문의 p(y|X)
                     loss = self.loss(pred, label_id)
 
-                    loss.backward()
-                    inner_optimizer.step()
+                    loss.backward(retain_graph=True)
+                    inner_optimizer.step() # task_weights['bert'], task_weights['mlp'] update
+                    task_weights['W'] -= self.inner_update_lr*task_weights['W'].grad # 수동으로 update
+                    task_weights['b'] -= self.inner_update_lr*task_weights['b'].grad # 수동으로 update
                     inner_optimizer.zero_grad()
+                    # W와 b의 grad는 자동으로 None으로 바뀜
+
+                    # 현재: bert와 mlp는 Adam으로 udpate, W와 b는 SGD로 update -> 나중에 통일하기
+                    # Adam과 SGD에서 잘 작동하는 lr가 다를 수 있음
                     
                     all_loss.append(loss.item())
-                
-                if i % 4 == 0:
+
+                if i % 1 == 0: # 원래: 4
                     logger.info(f"Inner Loss: {np.mean(all_loss)}")
-            
+
+            # 새로 작성한 inner loop -> inner loss가 안 줄어들음
+            # for inner_step, batch in enumerate(support_dataloader): # num_inner_update_step번 iterate
+            #     batch = tuple(t.to(self.device) for t in batch)
+            #     input_ids, attention_mask, segment_ids, label_id = batch
+
+            #     mlp_input = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [16, 768]
+            #     mlp_output = task_weights['mlp'](mlp_input) # [16, 256]
+            #     pred = task_weights['gen'](mlp_output) # [16, 2] / 논문의 p(y|X)
+            #     loss = self.loss(pred, label_id)
+
+            #     loss.backward()
+            #     inner_optimizer.step()
+            #     inner_optimizer.zero_grad()  
+
+            #     logger.info(f"Inner Update Step {inner_step+1} Loss: {loss.item()}")             
+
+
             # outer update 할 때는 BERT의 모든 layer unfreeze
             for name, param in task_weights['bert'].named_parameters():
                 param.requires_grad = True
-            logger.info('unfreeze warp layers for outer update')    
+            logger.info('unfreeze warp layers for outer update')   
+
+            # unify device for inner loop (query set)
+            task_weights['bert'].to(self.device_sub)
+            task_weights['mlp'].to(self.device_sub)
+            task_weights['W'] = task_weights['W'].to(self.device_sub) # tensor는 assign 해줘야
+            task_weights['b'] = task_weights['b'].to(self.device_sub) # tensor는 assign 해줘야
+            self.deep_set_encoder.to(self.device_sub) 
 
             query_dataloader = DataLoader(query, sampler=None, batch_size=len(query))
             query_batch = iter(query_dataloader).next()
             query_batch = tuple(t.to(self.device) for t in query_batch)
             q_input_ids, q_attention_mask, q_segment_ids, q_label_id = query_batch
-            q_mlp_input = task_weights['bert'](q_input_ids, q_attention_mask, q_segment_ids, output_hidden_states=True)[1][-1][:,0,:]
-            q_mlp_output = task_weights['mlp'](q_mlp_input)
-            q_outputs = task_weights['gen'](q_mlp_output)
+            q_mlp_input = task_weights['bert'](q_input_ids, q_attention_mask, q_segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [20, 768]
+            q_mlp_output = task_weights['mlp'](q_mlp_input) # [20, 256]
+            # q_outputs = task_weights['gen'](q_mlp_output) # [20, 2]
+            q_pred = torch.matmul(q_mlp_output, torch.transpose(task_weights['W'],0,1)) + task_weights['b'] # [20, 2]
 
             # In FOMAML, learner adapts on new task by updating
             # the gradient which is derived from fast model 
             # on queries set.
             if training:
-                q_loss = q_outputs[0]
+                q_loss = self.loss(q_pred, q_label_id)
                 q_loss.backward()
-                fast_model.to(torch.device('cpu'))
-                for i, params in enumerate(fast_model.parameters()):
-                    if task_idx == 0:
-                        sum_gradients.append(deepcopy(params.grad))
-                    else:
-                        sum_gradients[i] += deepcopy(params.grad)
 
-            q_logits = F.softmax(q_outputs[1],dim=1)
-            pre_label_id = torch.argmax(q_logits,dim=1)
+                # unify device for outer loop
+                # bert, deep_set_encoder 말고 다른 것들도 cpu로 옮겨야 하나? (사용 안 함) -> 일단 빼고 해보기
+                task_weights['bert'].to(torch.device('cpu'))
+                # task_weights['mlp'].to(torch.device('cpu'))
+                # task_weights['W'] = task_weights['W'].to(torch.device('cpu')) # tensor는 assign 해줘야
+                # task_weights['b'] = task_weights['b'].to(torch.device('cpu')) # tensor는 assign 해줘야
+                self.deep_set_encoder.to(torch.device('cpu'))
+
+                # meta paramter: bert
+                for i, params in enumerate(task_weights['bert'].parameters()):
+                    if task_idx == 0:
+                        sum_gradients_bert.append(deepcopy(params.grad))
+                    else:
+                        sum_gradients_bert[i] += deepcopy(params.grad)
+
+                # meta paramter: deep set encoder   
+                for i, params in enumerate(self.deep_set_encoder.parameters()):
+                    if task_idx == 0:
+                        sum_gradients_dse.append(deepcopy(params.grad))
+                    else:
+                        sum_gradients_dse[i] += deepcopy(params.grad)
+
+            q_logits = F.softmax(q_pred, dim=1)
+            pre_label_id = torch.argmax(q_logits, dim=1)
             pre_label_id = pre_label_id.detach().cpu().numpy().tolist()
             q_label_id = q_label_id.detach().cpu().numpy().tolist()
 
             acc = accuracy_score(pre_label_id,q_label_id)
             task_accs.append(acc)
             
-            del fast_model, inner_optimizer
+            del task_weights, inner_optimizer # 이렇게 하는거 맞음?
             torch.cuda.empty_cache()
         
         if training:
