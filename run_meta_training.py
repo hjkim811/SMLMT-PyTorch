@@ -36,22 +36,22 @@ def get_args():
 
     # Training 
     parser.add_argument("--data", type=str, default="dataset.json")
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=1)
     
-    parser.add_argument("--outer_batch_size", type=int, default=5,
+    parser.add_argument("--outer_batch_size", type=int, default=4,
                         help="Batch size of training tasks")
     parser.add_argument("--inner_batch_size", type=int, default=16,
                         help="Batch size of support set")
 
-    parser.add_argument("--inner_update_step", type=int, default=10)
-    parser.add_argument("--inner_update_step_eval", type=int, default=10)
-    parser.add_argument("--gpu_id", type=int, default=1)
+    parser.add_argument("--inner_update_step", type=int, default=7)
+    parser.add_argument("--inner_update_step_eval", type=int, default=7)
+    parser.add_argument("--gpu_id", type=int, default=0)
 
     # Meta task
     parser.add_argument("--num_domain", type=int, default=100)
     parser.add_argument("--num_support", type=int, default=80,
                         help="Number of support set")
-    parser.add_argument("--num_query", type=int, default=20,
+    parser.add_argument("--num_query", type=int, default=10,
                         help="Number of query set")
     
     parser.add_argument("--num_train_task", type=int, default=50,
