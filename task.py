@@ -34,7 +34,7 @@ class MetaTask(Dataset):
         self.tokenizer = tokenizer
         self.testset = testset
         self.test_domain = test_domain
-        self.max_seq_length = 256
+        self.max_seq_length = 128 # 원래 256
 
         self.create_batch(self.num_task, self.num_labels, self.testset, self.test_domain)
 
