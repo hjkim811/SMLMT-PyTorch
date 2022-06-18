@@ -242,7 +242,8 @@ def main():
             
                 # Save model
                 pt_file = get_output_dir(args.output_dir, f"ckpt/meta.epoch-{epoch+1}.step-{step+1}.pt")
-                torch.save(learner, pt_file)
+                # torch.save(learner, pt_file)
+                torch.save(learner.model.state_dict(), pt_file) # save only BERT parameters
                 logger.info(f"Saving checkpoint to {pt_file}")
 
                 # Reset the random seed
