@@ -112,12 +112,6 @@ class Learner(nn.Module):
             for key in task_weights.keys():
                 task_weights[key].to(self.device_sub)
             self.deep_set_encoder.to(self.device_sub)
-
-            # 확인용 -> 다 True
-            # for i in self.deep_set_encoder.parameters():
-            #     print(i.requires_grad)
-            # for i in task_weights['mlp'].parameters():
-            #     print(i.requires_grad)
             
             batch = iter(C0_dataloader).next()
             batch = tuple(t.to(self.device_sub) for t in batch)
@@ -145,13 +139,6 @@ class Learner(nn.Module):
             task_weights['W'] = task_weights['W'].to(self.device) # tensor는 assign 해줘야
             task_weights['b'] = task_weights['b'].to(self.device) # tensor는 assign 해줘야
             self.deep_set_encoder.to(self.device)
-            
-            # 확인용 -> 다 True
-            # for i in self.deep_set_encoder.parameters():
-            #     print(i.requires_grad)
-            # for i in task_weights['mlp'].parameters():
-            #     print(i.requires_grad)
-            # print(task_weights['W'].requires_grad)
 
             # bert와 mlp는 optimizer로 update
             # W와 b는 수동으로 update (non-leaf tensor이기 때문에 optimizer를 사용할 수 없음)
@@ -194,14 +181,7 @@ class Learner(nn.Module):
                     pred = torch.matmul(mlp_output, torch.transpose(task_weights['W'],0,1)) + task_weights['b'] # [16, 2] / 논문의 p(y|X)
                     loss = self.loss(pred, label_id)
 
-                    loss.backward(retain_graph=True)
-
-                    # 확인용
-                    # print('inner loop 후')
-                    # for name, param in task_weights['bert'].named_parameters():
-                    #     print(name)
-                    #     print(param.requires_grad)  
-                    #     print(param)                  
+                    loss.backward(retain_graph=True)                 
 
                     inner_optimizer.step() # task_weights['bert'], task_weights['mlp'] update
                     task_weights['W'] -= self.inner_update_lr*task_weights['W'].grad # 수동으로 update
@@ -240,13 +220,6 @@ class Learner(nn.Module):
                     param.requires_grad = True
                 logger.info('unfreeze warp layers for outer update')   
 
-
-            # 확인용
-            # print('warp layer 다 푼 이후')
-            # for name, param in task_weights['bert'].named_parameters():
-            #     print(name)
-            #     print(param.requires_grad)
-
             # unify device for inner loop (query set)
             task_weights['bert'].to(self.device_sub)
             task_weights['mlp'].to(self.device_sub)
@@ -278,46 +251,25 @@ class Learner(nn.Module):
                 # task_weights['b'] = task_weights['b'].to(torch.device('cpu')) # tensor는 assign 해줘야
                 self.deep_set_encoder.to(torch.device('cpu'))
 
-                # # meta paramter: bert
-                # for i, params in enumerate(task_weights['bert'].parameters()):
-                #     if task_idx == 0:
-                #         print('bert grad')
-                #         print(params.grad)
-                #         sum_gradients_bert.append(deepcopy(params.grad))
-                #     else:
-                #         print('bert grad')
-                #         print(params.grad)
-                #         sum_gradients_bert[i] += deepcopy(params.grad)
-
-                # meta paramter: bert - 확인용
+                # meta paramter: bert
                 for i, (name, params) in enumerate(task_weights['bert'].named_parameters()):
                     if task_idx == 0:
-                        # print('bert grad')
-                        # print(name)
-                        # print(params.grad)
-                        # print(params.grad == None)
-                        # print(type(params.grad))
                         if params.grad == None:
-                            print(name, 'None')
+                            # logger.info(name, 'None')
+                            pass
                         sum_gradients_bert.append(deepcopy(params.grad))
                     else:
-                        # print('bert grad')
-                        # print(name)
-                        # print(params.grad)
                         if params.grad == None:
-                            print(name, 'None')
+                            # logger.info(name, 'None')
+                            pass
                         else:
                             sum_gradients_bert[i] += deepcopy(params.grad)
 
                 # meta paramter: deep set encoder   
                 for i, params in enumerate(self.deep_set_encoder.parameters()):
                     if task_idx == 0:
-                        # print('deep set encoder grad')
-                        # print(params.grad)
                         sum_gradients_dse.append(deepcopy(params.grad))
                     else:
-                        # print('deep set encoder grad')
-                        # print(params.grad)
                         sum_gradients_dse[i] += deepcopy(params.grad)
 
             q_logits = F.softmax(q_pred, dim=1)
@@ -330,13 +282,13 @@ class Learner(nn.Module):
             
             del task_weights, inner_optimizer # 이렇게 하는거 맞음?
             torch.cuda.empty_cache()
-            # 여기까지 돌아감
         
         if training:
             # Average gradient across tasks
             for i in range(0,len(sum_gradients_bert)):
                 if sum_gradients_bert[i] == None:
-                    print('unable to divide because it is None')
+                    # logger.info('unable to divide because it is None')
+                    pass
                 else:
                     sum_gradients_bert[i] = sum_gradients_bert[i] / float(num_task)
 
