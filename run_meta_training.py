@@ -27,7 +27,8 @@ def get_args():
     parser = argparse.ArgumentParser(description="")
 
     # Model
-    parser.add_argument("--bert_model", type=str, default="bert-base-uncased")
+    parser.add_argument("--bert_model", type=str, default="bert-base-cased")
+    parser.add_argument("--max_seq_length", type=int, default=128)
     parser.add_argument("--num_labels", type=int, default=2)
     parser.add_argument("--emb_size", type=int, default=256,
                         help="Label and output embedding size")
@@ -35,10 +36,11 @@ def get_args():
                         help="Directory for saving checkpoint and log file.")
 
     # Training 
-    parser.add_argument("--data", type=str, default="dataset.json")
+    parser.add_argument("--train_data", type=str, default="dataset.json")
+    parser.add_argument("--test_data", type=str, default="dataset.json")
     parser.add_argument("--epochs", type=int, default=1)
     
-    parser.add_argument("--outer_batch_size", type=int, default=4,
+    parser.add_argument("--outer_batch_size", type=int, default=5,
                         help="Batch size of training tasks")
     parser.add_argument("--inner_batch_size", type=int, default=16,
                         help="Batch size of support set")
@@ -48,7 +50,6 @@ def get_args():
     parser.add_argument("--gpu_id", type=int, default=0)
 
     # Meta task
-    parser.add_argument("--num_domain", type=int, default=100)
     parser.add_argument("--num_support", type=int, default=80,
                         help="Number of support set")
     parser.add_argument("--num_query", type=int, default=10,
@@ -60,7 +61,7 @@ def get_args():
                         help="Number of meta testing tasks")
 
     # Optimizer
-    parser.add_argument("--outer_update_lr", type=float, default=5e-5)
+    parser.add_argument("--outer_update_lr", type=float, default=1e-5)
     parser.add_argument("--inner_update_lr", type=float, default=5e-5)
 
     return parser.parse_args()
@@ -75,37 +76,6 @@ def build_dirs(output_dir, logger):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     logger.info(f"Create folder for output directory: {output_dir}")
-
-
-def load_train_test_examples(data_file, test_domain, num_domain):
-    """Load Amazon customer reviews."""
-    train_examples, test_examples = list(), list()
-    reviews = json.load(open(data_file))
-    mention_domain = [r['domain'] for r in reviews if r["domain"] not in test_domain]
-    domain_cnt = Counter(mention_domain)
-    num_train_domain = len(domain_cnt)
-
-    if num_domain < num_train_domain:
-        select_domain = list()
-        for idx, d in enumerate(sorted(domain_cnt.items(), key=lambda kv:int(kv[1]))):
-            domain, num_examples = d
-            select_domain.append(domain)
-            if (idx+1) == num_domain:
-                break
-    else:
-        select_domain = [d for d in domain_cnt]
-    
-    for review in reviews:
-        # Low-resource 
-        if review["domain"]  in test_domain:
-            test_examples.append(review)
-
-        # High-resource
-        elif review["domain"] in select_domain:
-            train_examples.append(review)
-
-    return train_examples, test_examples
-
 
 def task_batch_generator(taskset, is_shuffle, batch_size):
     """Yield a batch of tasks from train or test set."""
@@ -146,7 +116,7 @@ def main():
     # Logger
     logger = logging.getLogger(__name__)
     build_dirs(output_dir, logger)
-    build_dirs(pathlib.Path(output_dir, "ckpt"), logger)
+    build_dirs(pathlib.Path(output_dir, "checkpoints"), logger)
     
     log_file = get_output_dir(output_dir, 'example.log')
     logging.basicConfig(filename=log_file,
@@ -159,7 +129,6 @@ def main():
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     logger.addHandler(console)
-    
     logger.info(args)
     
     # Saving arguments
@@ -168,17 +137,18 @@ def main():
         json.dump(args.__dict__, f, indent=2)
         logger.info(f"Saving hyperparameters to: {write_path}")
 
-
     ########## Load dataset ##########
     logger.info("Loading Datasets")
-    reviews = json.load(open(args.data))
-    
-    # Train and test example, 21555 and 300
-    test_domains = ["office_products", "automotive", "computer_&_video_games"] 
-    train_examples, test_examples = load_train_test_examples(args.data, test_domains, args.num_domain)
+    train_data = json.load(open(args.train_data))
+    test_data = json.load(open(args.test_data))
+
+    # Load한 데이터에서 num_train_task, num_test_task만큼만 사용
+    # 일단 여기에는 randomness 안 넣음
+    train_examples = train_data[:args.num_train_task]
+    test_examples = test_data[:args.num_test_task]
 
     # Tokenizer
-    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=True)
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=False) # 일단 BERT-cased로
 
     # Meta-Learner
     learner = Learner(args)
@@ -189,11 +159,13 @@ def main():
                           num_labels=args.num_labels,
                           k_support=args.num_support,
                           k_query=args.num_query,
-                          tokenizer=tokenizer,
-                          testset=True,
-                          test_domain=test_domains)
+                          max_seq_length=args.max_seq_length,
+                          tokenizer=tokenizer)
 
-    global_step = 0
+    global_step = 1
+    global_train_outer_loss = list() # 최종 length: num_task/outer_batch_size
+    global_train_acc = list() # 최종 length: num_task/outer_batch_size
+    global_test_acc = list() # 최종 length: num_task/(outer_batch_size*20)
     
     # Train perplexity:  epoch * num_task * ceil(k_support/batch_size) * inner_update_step
     for epoch in range(args.epochs):
@@ -204,10 +176,9 @@ def main():
                                num_task=args.num_train_task, # 50
                                num_labels=args.num_labels, # 2 (일단은 2만)
                                k_support=args.num_support, # 80
-                               k_query=args.num_query, # 20
-                               tokenizer=tokenizer,
-                               testset=False,
-                               test_domain=None)
+                               k_query=args.num_query, # 10
+                               max_seq_length=args.max_seq_length, # 128
+                               tokenizer=tokenizer)
 
         logger.info(f"Processing {len(train_tasks)} training tasks")
 
@@ -220,31 +191,43 @@ def main():
 
         # meta_batch has shape (batch_size, k_support*k_query) -> k_support+k_query인데 오타인듯
         for step, meta_batch in enumerate(task_batch): # 10번 iterate (num_task/outer_batch_size = 50/5 = 10)
-            acc = learner(meta_batch, training=True)
-            logger.info(f"Training batch: {step+1}\ttraining accuracy: {acc}\n")
-            
-            if global_step % 2 == 0:
+            acc, q_loss = learner(meta_batch, step, training=True)
+            logger.info(f"Training batch: {step+1} ({(step+1)*args.outer_batch_size} tasks done) \t training accuracy: {round(acc, 4)} \t average outer loss: {round(q_loss, 4)}\n")
+            global_train_acc.append(round(acc, 4))
+            global_train_outer_loss.append(round(q_loss, 4))
+
+            if global_step % 20 == 0: # task 1000개로 할 때는 % 20으로
                 # Evaluate Test every 1 batch
                 logger.info("--- Evaluate test tasks ---")
                 test_accs = list()
                 # fixed seed for test task
                 set_random_seed(1)
                 test_db = task_batch_generator(test_tasks,
-                                               is_shuffle=False,
+                                               is_shuffle=True,
                                                batch_size=1)
             
                 for idx, test_batch in enumerate(test_db):
-                    acc = learner(test_batch, training=False)
+                    acc, _ = learner(test_batch, step, training=False)
                     test_accs.append(acc)
-                    logger.info(f"Testing Task: {idx+1}\taccuracy: {acc}")
+                    logger.info(f"Testing Task: {idx+1} \t accuracy: {round(acc, 4)}")
             
-                logger.info(f"Epoch: {epoch+1}\tTesting batch: {step+1}\tTest accuracy: {np.mean(test_accs)}\n")
+                logger.info(f"Epoch: {epoch+1}\tTesting batch: {step+1}\tTest accuracy: {round(np.mean(test_accs), 4)}\n")
+                global_test_acc.append(round(np.mean(test_accs), 4))
+
+                # Report results
+                logger.info("--- Report ---")
+                logger.info("--- Outer Loss ---")
+                logger.info(global_train_outer_loss)
+                logger.info("--- Training Accuracy ---")
+                logger.info(global_train_acc)
+                logger.info("--- Test Accuracy ---")
+                logger.info(global_test_acc)
             
                 # Save model
-                pt_file = get_output_dir(args.output_dir, f"ckpt/meta.epoch-{epoch+1}.step-{step+1}.pt")
+                pt_file = get_output_dir(args.output_dir, f"checkpoints/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
                 # torch.save(learner, pt_file)
                 torch.save(learner.model.state_dict(), pt_file) # save only BERT parameters
-                logger.info(f"Saving checkpoint to {pt_file}")
+                logger.info(f"Saving checkpoint to {pt_file}\n")
 
                 # Reset the random seed
                 set_random_seed(int(time.time() % 10))

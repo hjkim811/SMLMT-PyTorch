@@ -11,20 +11,17 @@ import time
 import json, pickle
 from torch.utils.data import TensorDataset
 
-LABEL_MAP  = {'positive':0, 'negative':1, 0:'positive', 1:'negative'}
+# LABEL_MAP  = {'positive':0, 'negative':1, 0:'positive', 1:'negative'}
 
 class MetaTask(Dataset):
-    def __init__(self, examples, num_task, num_labels, k_support, k_query, tokenizer, testset, test_domain):
+    def __init__(self, examples, num_task, num_labels, k_support, k_query, max_seq_length, tokenizer):
         """
-
         Args:
           samples: list of samples
           num_task: number of training tasks.
           k_support: number of support sample per task
           k_query: number of query sample per task
           tokenizer: Tokeneizer from `transformers`
-          testset: Boolean, whether contruncting test set
-          test_domain: List of test domain
         """
         self.examples = examples
         self.num_task = num_task
@@ -32,80 +29,15 @@ class MetaTask(Dataset):
         self.k_support = k_support
         self.k_query = k_query
         self.tokenizer = tokenizer
-        self.testset = testset
-        self.test_domain = test_domain
-        self.max_seq_length = 128 # 원래 256
+        self.max_seq_length = max_seq_length
 
-        self.create_batch(self.num_task, self.num_labels, self.testset, self.test_domain)
+        self.create_batch()
 
-    # 수정완료: 각 label에 대해 k_support + k_query개만큼 균등하게 sampling하도록
-    def create_batch(self, num_task, num_labels, testset, test_domain):
-        # support set: (k_support, 3)
-        # query set: (k_query, 3)
-        self.supports = list()
-        self.queries = list()
+    def create_batch(self):
+        self.supports = [task['support'] for task in self.examples]
+        self.queries = [task['query'] for task in self.examples]
 
-        if testset is True:
-            # else인 경우와 마찬가지로 수정했으나 test data는 domain별로 100개씩 있어서 AssertionError 에러 발생함 (200 <= 100)
-            '''
-            for domain in test_domain:
-                domainExamples = [exm for exm in self.examples if exm["domain"] == domain]
-            
-                assert (num_labels*(self.k_support+self.k_query)) <= len(domainExamples)
-
-                label1Examples = [e for e in domainExamples if e['label'] == 'positive']
-                label2Examples = [e for e in domainExamples if e['label'] == 'negative']
-
-                label1_support_examples = random.sample(label1Examples,self.k_support)
-                label1_query_examples = random.sample(label1Examples,self.k_query)
-                label2_support_examples = random.sample(label2Examples,self.k_support)
-                label2_query_examples = random.sample(label2Examples,self.k_query) 
-
-                support_examples = label1_support_examples + label2_support_examples # length: num_labels * k_support
-                query_examples = label1_query_examples + label2_query_examples # length: num_labels * k_query                                               
-
-                random.shuffle(support_examples)
-                random.shuffle(query_examples)
-           
-                self.supports.append(support_examples)
-                self.queries.append(query_examples)
-            '''
-
-            for domain in test_domain:
-                domain_examples = [exm for exm in self.examples if exm["domain"]==domain]
-            
-                assert (self.k_support+self.k_query) <= len(domain_examples)
-                domain_train = domain_examples[:self.k_support]
-                domain_test = domain_examples[self.k_support:self.k_support+self.k_query]
-                
-                self.supports.append(domain_train)
-                self.queries.append(domain_test)
-
-        else:
-            for b in range(num_task):  # for each task
-                # 1.select domain randomly
-                domain = random.choice(self.examples)['domain']
-                domainExamples = [e for e in self.examples if e['domain'] == domain]
-
-                label1Examples = [e for e in domainExamples if e['label'] == 'positive']
-                label2Examples = [e for e in domainExamples if e['label'] == 'negative']
-            
-                # 2.select k_support + k_query examples from domain randomly (각 label의 example에 대해)
-                label1_support_examples = random.sample(label1Examples,self.k_support)
-                label1_query_examples = random.sample(label1Examples,self.k_query)
-                label2_support_examples = random.sample(label2Examples,self.k_support)
-                label2_query_examples = random.sample(label2Examples,self.k_query)
-
-                support_examples = label1_support_examples + label2_support_examples # length: num_labels * k_support
-                query_examples = label1_query_examples + label2_query_examples # length: num_labels * k_query
-
-                random.shuffle(support_examples)
-                random.shuffle(query_examples)
-           
-                self.supports.append(support_examples)
-                self.queries.append(query_examples)
-
-    def create_feature_set(self,examples):
+    def create_feature_set(self, examples):
         all_input_ids      = torch.empty(len(examples), self.max_seq_length, dtype = torch.long)
         all_attention_mask = torch.empty(len(examples), self.max_seq_length, dtype = torch.long)
         all_segment_ids    = torch.empty(len(examples), self.max_seq_length, dtype = torch.long)
@@ -113,15 +45,17 @@ class MetaTask(Dataset):
 
         for id_,example in enumerate(examples):
             input_ids = self.tokenizer.encode(example['text'])
+            if len(input_ids) > self.max_seq_length:
+                input_ids = input_ids[:self.max_seq_length] # max_seq_length를 넘어가는 경우에는 max_seq_length에서 cut
             attention_mask = [1] * len(input_ids)
-            segment_ids    = [0] * len(input_ids)
+            segment_ids    = [0] * len(input_ids)         
 
             while len(input_ids) < self.max_seq_length:
                 input_ids.append(0)
                 attention_mask.append(0)
                 segment_ids.append(0)
 
-            label_id = LABEL_MAP[example['label']]
+            label_id = example['label']
             all_input_ids[id_] = torch.Tensor(input_ids).to(torch.long)
             all_attention_mask[id_] = torch.Tensor(attention_mask).to(torch.long)
             all_segment_ids[id_] = torch.Tensor(segment_ids).to(torch.long)
