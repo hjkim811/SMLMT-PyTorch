@@ -64,6 +64,10 @@ def get_args():
     parser.add_argument("--outer_update_lr", type=float, default=1e-5)
     parser.add_argument("--inner_update_lr", type=float, default=5e-5)
 
+    # Curriculum
+    parser.add_argument("--curriculum", type=bool, default=False, 
+                        help="Use curriculum learning")
+
     return parser.parse_args()
 
 def get_output_dir(output_dir, file):
@@ -116,7 +120,7 @@ def main():
     # Logger
     logger = logging.getLogger(__name__)
     build_dirs(output_dir, logger)
-    build_dirs(pathlib.Path(output_dir, "checkpoints"), logger)
+    build_dirs(pathlib.Path(output_dir, "ckpt"), logger)
     
     log_file = get_output_dir(output_dir, 'example.log')
     logging.basicConfig(filename=log_file,
@@ -146,6 +150,8 @@ def main():
     # 일단 여기에는 randomness 안 넣음
     train_examples = train_data[:args.num_train_task]
     test_examples = test_data[:args.num_test_task]
+    if args.curriculum:
+        train_examples.reverse() # 쉬운 task가 먼저 오도록
 
     # Tokenizer
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=False) # 일단 BERT-cased로
@@ -186,7 +192,7 @@ def main():
         # Sample task batch from total tasks in size of `min(num_task, batch_size)`
         # Each task contains `k_support` + `k_query` examples
         task_batch = create_batch_of_tasks(train_tasks, 
-                                           is_shuffle=True,
+                                           is_shuffle=not args.curriculum,
                                            batch_size=args.outer_batch_size) # default는 4지만 argument는 5
 
         # meta_batch has shape (batch_size, k_support*k_query) -> k_support+k_query인데 오타인듯
@@ -224,7 +230,7 @@ def main():
                 logger.info(global_test_acc)
             
                 # Save model
-                pt_file = get_output_dir(args.output_dir, f"checkpoints/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
+                pt_file = get_output_dir(args.output_dir, f"ckpt/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
                 # torch.save(learner, pt_file)
                 torch.save(learner.model.state_dict(), pt_file) # save only BERT parameters
                 logger.info(f"Saving checkpoint to {pt_file}\n")
