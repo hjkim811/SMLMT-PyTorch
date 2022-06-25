@@ -39,8 +39,6 @@ class Learner(nn.Module):
         self.bert_model = args.bert_model
         self.loss = nn.CrossEntropyLoss()
         self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
-        self.device_sub = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu') # 나중에 없애기
-
         self.model = BertForSequenceClassification.from_pretrained(self.bert_model, num_labels = self.num_labels)
         self.model.train() # sets to train mode
         self.deep_set_encoder = nn.Sequential(
@@ -103,14 +101,14 @@ class Learner(nn.Module):
 
             # unify device for parameter generation
             for key in task_weights.keys():
-                task_weights[key].to(self.device_sub)
-            self.deep_set_encoder.to(self.device_sub)
+                task_weights[key].to(self.device)
+            self.deep_set_encoder.to(self.device)
 
             class_W = []
             class_b = []
             for dataloader in class_dataloader:
                 batch = iter(dataloader).next()
-                batch = tuple(t.to(self.device_sub) for t in batch)
+                batch = tuple(t.to(self.device) for t in batch)
                 input_ids, attention_mask, segment_ids, _ = batch # label은 제외
                 with torch.no_grad():
                     outputs = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True) 
@@ -124,11 +122,8 @@ class Learner(nn.Module):
             task_weights['b'] = torch.cat(class_b) # [n]
 
             # unify device for inner loop (support set)
-            task_weights['bert'].to(self.device)
-            task_weights['mlp'].to(self.device)
             task_weights['W'] = task_weights['W'].to(self.device) # tensor는 assign 해줘야
             task_weights['b'] = task_weights['b'].to(self.device) # tensor는 assign 해줘야
-            self.deep_set_encoder.to(self.device)
 
             # bert와 mlp는 optimizer로 update
             # W와 b는 수동으로 update (non-leaf tensor이기 때문에 optimizer를 사용할 수 없음)
@@ -193,16 +188,9 @@ class Learner(nn.Module):
                     param.requires_grad = True
                 # logger.info('unfreeze warp layers for outer update')   
 
-            # unify device for inner loop (query set)
-            task_weights['bert'].to(self.device_sub)
-            task_weights['mlp'].to(self.device_sub)
-            task_weights['W'] = task_weights['W'].to(self.device_sub) # tensor는 assign 해줘야
-            task_weights['b'] = task_weights['b'].to(self.device_sub) # tensor는 assign 해줘야
-            self.deep_set_encoder.to(self.device_sub) 
-
             query_dataloader = DataLoader(query, sampler=None, batch_size=len(query))
             query_batch = iter(query_dataloader).next()
-            query_batch = tuple(t.to(self.device_sub) for t in query_batch)
+            query_batch = tuple(t.to(self.device) for t in query_batch)
             q_input_ids, q_attention_mask, q_segment_ids, q_label_id = query_batch
             q_mlp_input = task_weights['bert'](q_input_ids, q_attention_mask, q_segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [20, 768]
             q_mlp_output = task_weights['mlp'](q_mlp_input) # [20, 256]
