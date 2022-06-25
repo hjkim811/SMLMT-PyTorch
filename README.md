@@ -1,7 +1,7 @@
 # SMLMT-PyTorch
 This is a repository for creating tasks and running meta-training using Subset Masked Language Modeling Tasks (SMLMT).
 SMLMT proposes a self-supervised approach to generate a large, rich, meta-learning task distribution from unlabeled text.
-Then, the model can be meta-trained using a optimization-based framework based on MAML.
+With the generated tasks, the model can be meta-trained using a optimization-based framework based on MAML.
 
 ## Environment
 ```
@@ -10,7 +10,7 @@ conda activate meta-bert
 ```
 
 ## Task Creation
-Refer create_task.ipynb. <br />
+Refer [create_task.ipynb](https://github.com/hjkim811/SMLMT-PyTorch/blob/main/create_task.ipynb). <br />
 Created task files using review text in laptop and restaurant domain can be found [here](https://github.com/hjkim811/SMLMT-PyTorch/tree/main/task). <br />
 Each file contains 1000 tasks with 80 support samples and 10 query samples, respectively.
 
