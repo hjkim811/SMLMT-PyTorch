@@ -36,26 +36,6 @@ def mask_sentence(vocab, corpus, sampling_num):
     sampled = sent_containing_specific_word(vocab, corpus, sampling_num)
     return [TreebankWordDetokenizer().detokenize(['[MASK]' if word==vocab else word for word in sent]) for sent in sampled]
 
-# def create_task(vocab_list, corpus, num_support, num_query):
-#     '''
-#     Creates one task
-#     len(task) = len(vocab_list) * (num_support + num_query)
-#     vocab_list: list of vocabulary words 
-#                 len(vocab_list) becomes N (number of classes)
-#     corpus: list of sentences
-#     '''   
-#     shuffle(vocab_list) # for random label assignment
-#     task = list()    
-#     for idx, vocab in enumerate(vocab_list):
-#         for masked_sent in mask_sentence(vocab, corpus, num_support + num_query):
-#             sent = dict()
-#             sent['text'] = masked_sent
-#             sent['label'] = idx
-#             sent['word'] = vocab
-#             task.append(sent)
-        
-#     return task
-
 def create_task(vocab_list, corpus, num_support, num_query, mode='random'):
     '''
     Creates one task

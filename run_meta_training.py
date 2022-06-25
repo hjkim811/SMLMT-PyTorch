@@ -1,6 +1,4 @@
 """Train meta-learning BERT."""
-# The script is modified from `https://github.com/mailong25/meta-learning-bert/blob/master/main.py`
-
 import os
 import argparse
 import logging
@@ -66,7 +64,7 @@ def get_args():
 
     # Curriculum
     parser.add_argument("--curriculum", type=bool, default=False, 
-                        help="Use curriculum learning")
+                        help="Whether to maintain the order of tasks in task input file")
 
     return parser.parse_args()
 
@@ -154,7 +152,7 @@ def main():
         train_examples.reverse() # 쉬운 task가 먼저 오도록
 
     # Tokenizer
-    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=False) # 일단 BERT-cased로
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=False) # BERT-cased로
 
     # Meta-Learner
     learner = Learner(args)
@@ -179,11 +177,11 @@ def main():
                
         # Build training task set (num_task)
         train_tasks = MetaTask(train_examples,
-                               num_task=args.num_train_task, # 50
-                               num_labels=args.num_labels, # 2 (일단은 2만)
-                               k_support=args.num_support, # 80
-                               k_query=args.num_query, # 10
-                               max_seq_length=args.max_seq_length, # 128
+                               num_task=args.num_train_task, 
+                               num_labels=args.num_labels, 
+                               k_support=args.num_support, 
+                               k_query=args.num_query, 
+                               max_seq_length=args.max_seq_length, 
                                tokenizer=tokenizer)
 
         logger.info(f"Processing {len(train_tasks)} training tasks")
@@ -195,14 +193,14 @@ def main():
                                            is_shuffle=not args.curriculum,
                                            batch_size=args.outer_batch_size) # default는 4지만 argument는 5
 
-        # meta_batch has shape (batch_size, k_support*k_query) -> k_support+k_query인데 오타인듯
-        for step, meta_batch in enumerate(task_batch): # 10번 iterate (num_task/outer_batch_size = 50/5 = 10)
+        # meta_batch has shape (batch_size, k_support + k_query)
+        for step, meta_batch in enumerate(task_batch): # num_task/outer_batch_size번 iterate
             acc, q_loss = learner(meta_batch, step, training=True)
             logger.info(f"Training batch: {step+1} ({(step+1)*args.outer_batch_size} tasks done) \t training accuracy: {round(acc, 4)} \t average outer loss: {round(q_loss, 4)}\n")
             global_train_acc.append(round(acc, 4))
             global_train_outer_loss.append(round(q_loss, 4))
 
-            if global_step % 20 == 0: # task 1000개로 할 때는 % 20으로
+            if global_step % 20 == 0:
                 # Evaluate Test every 1 batch
                 logger.info("--- Evaluate test tasks ---")
                 test_accs = list()

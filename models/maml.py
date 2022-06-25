@@ -1,9 +1,7 @@
 """Perform First-Order MAML."""
-# The script is modified from the `https://github.com/mailong25/meta-learning-bert/blob/master/maml.py`
-
 import logging
 from torch import nn
-import torch.nn as nn # import 충돌 생기려나?
+import torch.nn as nn # import overloading?
 from torch.nn import functional as F
 from torch.utils.data import TensorDataset, DataLoader, Subset, RandomSampler, SubsetRandomSampler
 from torch.optim import Adam, SGD
@@ -49,11 +47,11 @@ class Learner(nn.Module):
                                 nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
                                 nn.Tanh(),
                                 nn.Linear(self.model.config.hidden_size//2, self.emb_size + 1) # [384, 257]
-                                ) # ψ / 마지막에 tanh 또 넣어야 하나? / initialize 어떻게?
+                                ) # ψ / initialize 다르게?
         self.deep_set_encoder.train() # sets to train mode
 
         outer_params = list(self.model.parameters()) + list(self.deep_set_encoder.parameters()) # length: 201 + 4 =205
-        self.outer_optimizer = Adam(outer_params, lr=self.outer_update_lr) # SGD로 바꿔야?
+        self.outer_optimizer = Adam(outer_params, lr=self.outer_update_lr) # SGD로?
         
 
     def forward(self, batch_tasks, step, training=True):
@@ -74,16 +72,12 @@ class Learner(nn.Module):
         num_inner_update_step = self.inner_update_step if training else self.inner_update_step_eval
 
         for task_idx, task in enumerate(batch_tasks): # 5번 iterate (= outer_batch_size)
-            # 이 아래: 하나의 task에 대한 것 (support data n*80개 존재함)
+            # 이 아래: 하나의 task에 대한 것 (support data n*80개 존재)
 
             support = task[0] # 각 label에 대한 데이터 각각 80개씩 있음 / = pseudocode의 D^tr
             query   = task[1] # 각 label에 대한 데이터 각각 10개씩 있음       
 
             support_dataloader = DataLoader(support, sampler=RandomSampler(support), batch_size=self.inner_batch_size)
-
-            # inner loop에서 for loop 하나 없앨 때는 이거 사용하기
-            # support_dataloader = DataLoader(support, sampler=SubsetRandomSampler(list(range(self.inner_batch_size*num_inner_update_step))), batch_size=self.inner_batch_size) 
-            # len = num_inner_update_step
 
             class_partition = []
             for label in range(self.num_labels):
@@ -104,12 +98,8 @@ class Learner(nn.Module):
                                     nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size//2), # [768, 384]
                                     nn.Tanh(),
                                     nn.Linear(self.model.config.hidden_size//2, self.emb_size) # [384, 256]
-                                    ) # ф / 마지막에 tanh 또 넣어야 하나? / initialize 어떻게?
+                                    ) # ф / initialize 다르게?
             # logger.info('task-specific parameters initialized')
-
-            # Multi-GPU 사용할 때
-            # task_weights['bert'] = nn.DataParallel(task_weights['bert'])
-            # self.deep_set_encoder = nn.DataParallel(self.deep_set_encoder)
 
             # unify device for parameter generation
             for key in task_weights.keys():
@@ -143,7 +133,7 @@ class Learner(nn.Module):
             # bert와 mlp는 optimizer로 update
             # W와 b는 수동으로 update (non-leaf tensor이기 때문에 optimizer를 사용할 수 없음)
             inner_params = list(task_weights['bert'].parameters()) + list(task_weights['mlp'].parameters()) # length: 201 + 4 = 205
-            inner_optimizer = Adam(inner_params, lr=self.inner_update_lr) # 나중에 SGD로 바꾸기
+            inner_optimizer = Adam(inner_params, lr=self.inner_update_lr) # SGD로?
 
             # train mode 확인 방법: .training
             # W와 b는 nn.Module이 아니라 tensor이기 때문에 아래 작업 필요 x
@@ -165,8 +155,8 @@ class Learner(nn.Module):
             else:
                 logger.info(f"--- Testing Task ---")
 
-            # 기존 inner loop
-            for i in range(0,num_inner_update_step): # 이 loop는 빼야 하나?
+            # inner loop
+            for i in range(0,num_inner_update_step): 
                 all_loss = []
                 for inner_step, batch in enumerate(support_dataloader): # 10번 iterate (num_lables*num_support/inner_batch_size = 2*80/16 = 10)
 
@@ -195,24 +185,7 @@ class Learner(nn.Module):
                     all_loss.append(loss.item())
 
                 if i % 3 == 0: # 원래: 4
-                    logger.info(f"Inner Loss: {round(np.mean(all_loss),4)}")
-
-            # 새로 작성한 inner loop -> inner loss가 안 줄어들음
-            # for inner_step, batch in enumerate(support_dataloader): # num_inner_update_step번 iterate
-            #     batch = tuple(t.to(self.device) for t in batch)
-            #     input_ids, attention_mask, segment_ids, label_id = batch
-
-            #     mlp_input = task_weights['bert'](input_ids, attention_mask, segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [16, 768]
-            #     mlp_output = task_weights['mlp'](mlp_input) # [16, 256]
-            #     pred = task_weights['gen'](mlp_output) # [16, 2] / 논문의 p(y|X)
-            #     loss = self.loss(pred, label_id)
-
-            #     loss.backward()
-            #     inner_optimizer.step()
-            #     inner_optimizer.zero_grad()  
-
-            #     logger.info(f"Inner Update Step {inner_step+1} Loss: {loss.item()}")             
-
+                    logger.info(f"Inner Loss: {round(np.mean(all_loss),4)}")        
 
             # outer update 할 때는 BERT의 모든 layer unfreeze
             if training:
@@ -233,7 +206,6 @@ class Learner(nn.Module):
             q_input_ids, q_attention_mask, q_segment_ids, q_label_id = query_batch
             q_mlp_input = task_weights['bert'](q_input_ids, q_attention_mask, q_segment_ids, output_hidden_states=True)[1][-1][:,0,:] # [20, 768]
             q_mlp_output = task_weights['mlp'](q_mlp_input) # [20, 256]
-            # q_outputs = task_weights['gen'](q_mlp_output) # [20, 2]
             q_pred = torch.matmul(q_mlp_output, torch.transpose(task_weights['W'],0,1)) + task_weights['b'] # [20, 2]
 
             # In FOMAML, learner adapts on new task by updating
@@ -278,7 +250,7 @@ class Learner(nn.Module):
             acc = accuracy_score(pre_label_id,q_label_id)
             task_accs.append(acc)
             
-            del task_weights, inner_optimizer # 이렇게 하는거 맞음?
+            del task_weights, inner_optimizer
             torch.cuda.empty_cache()
         
         if training:
@@ -293,7 +265,7 @@ class Learner(nn.Module):
             for i in range(0,len(sum_gradients_dse)):
                 sum_gradients_dse[i] = sum_gradients_dse[i] / float(num_task)
 
-            #Assign gradient for original model, then using optimizer to update its weights
+            # Assign gradient for original model, then using optimizer to update its weights
             # gradient 계산은 task-specific parameter에서 하고 meta parameter 업데이트(계산)할 때는 그 값을 복사해서 사용
             for i, params in enumerate(self.model.parameters()):
                 params.grad = sum_gradients_bert[i]
