@@ -1,6 +1,6 @@
 # SMLMT-PyTorch
-This is a repository for creating tasks and running meta-training using Subset Masked Language Modeling Tasks (SMLMT). <br />
-SMLMT proposes a self-supervised approach to generate a large, rich, meta-learning task distribution from unlabeled text. <br />
+This is a repository for creating tasks and running meta-training using Subset Masked Language Modeling Tasks (SMLMT).
+SMLMT proposes a self-supervised approach to generate a large, rich, meta-learning task distribution from unlabeled text.
 Then, the model can be meta-trained using a optimization-based framework based on MAML.
 
 ## Environment
