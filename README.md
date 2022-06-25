@@ -53,5 +53,5 @@ python run_meta_training.py \
 ```
  
 ## References
-- Code is based on this repository: https://github.com/pjlintw/Meta-BERT#installation
-- Paper: Bansal, Trapit, et al. (2020). [Self-Supervised Meta-Learning for Few-Shot Natural Language Classification Tasks](https://arxiv.org/pdf/2009.08445.pdf)
+- Code is based on this repository: https://github.com/pjlintw/Meta-BERT
+- Paper: Bansal, Trapit, et al. (EMNLP 2020). [Self-Supervised Meta-Learning for Few-Shot Natural Language Classification Tasks](https://arxiv.org/pdf/2009.08445.pdf)
