@@ -136,7 +136,7 @@ class Learner(nn.Module):
             task_weights['mlp'].train() # train mode: True -> True
             
             if training:
-                logger.info(f"--- Training Task {step*self.outer_batch_size+task_idx+1} ---")
+                # logger.info(f"--- Training Task {step*self.outer_batch_size+task_idx+1} ---")
 
                 # freeze warp layers
                 num_params = 0
@@ -179,8 +179,8 @@ class Learner(nn.Module):
                     
                     all_loss.append(loss.item())
 
-                if i % 3 == 0: # 원래: 4
-                    logger.info(f"Inner Loss: {round(np.mean(all_loss),4)}")        
+                # if i % 3 == 0: # 원래: 4
+                #     logger.info(f"Inner Loss: {round(np.mean(all_loss),4)}")        
 
             # outer update 할 때는 BERT의 모든 layer unfreeze
             if training:
@@ -202,7 +202,7 @@ class Learner(nn.Module):
             if training:
                 q_loss = self.loss(q_pred, q_label_id)
                 q_loss.backward()
-                logger.info(f"Outer Loss: {round(float(q_loss.detach().cpu().numpy()), 4)}")
+                # logger.info(f"Outer Loss: {round(float(q_loss.detach().cpu().numpy()), 4)}")
                 task_qloss.append(float(q_loss.detach().cpu().numpy()))
 
                 # unify device for outer loop

@@ -196,11 +196,12 @@ def main():
         # meta_batch has shape (batch_size, k_support + k_query)
         for step, meta_batch in enumerate(task_batch): # num_task/outer_batch_size번 iterate
             acc, q_loss = learner(meta_batch, step, training=True)
-            logger.info(f"Training batch: {step+1} ({(step+1)*args.outer_batch_size} tasks done) \t training accuracy: {round(acc, 4)} \t average outer loss: {round(q_loss, 4)}\n")
+            # logger.info(f"Training batch: {step+1} ({(step+1)*args.outer_batch_size} tasks done) \t training accuracy: {round(acc, 4)} \t average outer loss: {round(q_loss, 4)}\n") # logger.info full로 출력할 때
+            logger.info(f"Training batch: {step+1} ({(step+1)*args.outer_batch_size} tasks done) \t training accuracy: {round(acc, 4)} \t average outer loss: {round(q_loss, 4)}") # 출력 최소화할 때
             global_train_acc.append(round(acc, 4))
             global_train_outer_loss.append(round(q_loss, 4))
 
-            if global_step % 20 == 0:
+            if global_step % 200 == 0: # task 1000개로 할 때는 % 20으로 -> task 100개(20x5)마다 checkpoint 저장함
                 # Evaluate Test every 1 batch
                 logger.info("--- Evaluate test tasks ---")
                 test_accs = list()
@@ -228,7 +229,8 @@ def main():
                 logger.info(global_test_acc)
             
                 # Save model
-                pt_file = get_output_dir(args.output_dir, f"ckpt/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
+                # pt_file = get_output_dir(args.output_dir, f"ckpt/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
+                pt_file = get_output_dir(args.output_dir, f"ckpt/pytorch_model.bin")
                 # torch.save(learner, pt_file)
                 torch.save(learner.model.state_dict(), pt_file) # save only BERT parameters
                 logger.info(f"Saving checkpoint to {pt_file}\n")
