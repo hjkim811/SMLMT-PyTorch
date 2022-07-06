@@ -6,6 +6,7 @@ from random import sample, seed, shuffle
 import itertools
 from tqdm.notebook import tqdm
 from nltk import word_tokenize
+from nltk.stem import PorterStemmer
 from nltk.tokenize.treebank import TreebankWordDetokenizer
 
 def sent_containing_specific_word(vocab, corpus, sampling_num):
@@ -89,11 +90,13 @@ def vocab_sampler(vocabs, n, num_task, mode='random'):
     num_task: number of pairs to create
     '''
     combs = []
+    porter_stemmer = PorterStemmer()
     
     if mode == 'random':
         while (len(combs) < num_task):
             comb = list(set(sample(vocabs, n)))
-            if comb not in combs:
+            stemmed = [porter_stemmer.stem(w) for w in comb]
+            if comb not in combs and len(stemmed)==len(set(stemmed)):
                 combs.append(comb)
         
     elif mode == 'curriculum':
@@ -118,7 +121,8 @@ def vocab_sampler(vocabs, n, num_task, mode='random'):
 
         while (len(combs) < num_task):
             comb = list(set(sample(vocabs, n)))
-            if comb not in combs:
+            stemmed = [porter_stemmer.stem(w) for w in comb]
+            if comb not in combs and len(stemmed)==len(set(stemmed)):
                 combs.append(comb) 
 
         combs = [(comb, sim_score(comb)) for comb in combs]
