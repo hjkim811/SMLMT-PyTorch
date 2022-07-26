@@ -142,12 +142,12 @@ def main():
     ########## Load dataset ##########
     logger.info("Loading Datasets")
     train_data = json.load(open(args.train_data))
-    test_data = json.load(open(args.test_data))
+    # test_data = json.load(open(args.test_data))
 
     # Load한 데이터에서 num_train_task, num_test_task만큼만 사용
     # 일단 여기에는 randomness 안 넣음
     train_examples = train_data[:args.num_train_task]
-    test_examples = test_data[:args.num_test_task]
+    # test_examples = test_data[:args.num_test_task]
     if args.curriculum:
         train_examples.reverse() # 쉬운 task가 먼저 오도록
 
@@ -158,18 +158,18 @@ def main():
     learner = Learner(args)
 
     ### Sample testing tasks ###
-    test_tasks = MetaTask(test_examples,
-                          num_task=args.num_test_task,
-                          num_labels=args.num_labels,
-                          k_support=args.num_support,
-                          k_query=args.num_query,
-                          max_seq_length=args.max_seq_length,
-                          tokenizer=tokenizer)
+    # test_tasks = MetaTask(test_examples,
+    #                       num_task=args.num_test_task,
+    #                       num_labels=args.num_labels,
+    #                       k_support=args.num_support,
+    #                       k_query=args.num_query,
+    #                       max_seq_length=args.max_seq_length,
+    #                       tokenizer=tokenizer)
 
     global_step = 1
     global_train_outer_loss = list() # 최종 length: num_task/outer_batch_size
     global_train_acc = list() # 최종 length: num_task/outer_batch_size
-    global_test_acc = list() # 최종 length: num_task/(outer_batch_size*20)
+    # global_test_acc = list() # 최종 length: num_task/(outer_batch_size*20)
     
     # Train perplexity:  epoch * num_task * ceil(k_support/batch_size) * inner_update_step
     for epoch in range(args.epochs):
@@ -201,23 +201,23 @@ def main():
             global_train_acc.append(round(acc, 4))
             global_train_outer_loss.append(round(q_loss, 4))
 
-            if global_step % 200 == 0: # task 1000개로 할 때는 % 20으로 -> task 100개(20x5)마다 checkpoint 저장함
-                # Evaluate Test every 1 batch
-                logger.info("--- Evaluate test tasks ---")
-                test_accs = list()
-                # fixed seed for test task
-                set_random_seed(1)
-                test_db = task_batch_generator(test_tasks,
-                                               is_shuffle=True,
-                                               batch_size=1)
+            if global_step % 200 == 0: # task 1000개(200x5)마다 checkpoint 저장함
+                # # Evaluate Test every 1 batch
+                # logger.info("--- Evaluate test tasks ---")
+                # test_accs = list()
+                # # fixed seed for test task
+                # set_random_seed(1)
+                # test_db = task_batch_generator(test_tasks,
+                #                                is_shuffle=True,
+                #                                batch_size=1)
             
-                for idx, test_batch in enumerate(test_db):
-                    acc, _ = learner(test_batch, step, training=False)
-                    test_accs.append(acc)
-                    logger.info(f"Testing Task: {idx+1} \t accuracy: {round(acc, 4)}")
+                # for idx, test_batch in enumerate(test_db):
+                #     acc, _ = learner(test_batch, step, training=False)
+                #     test_accs.append(acc)
+                #     logger.info(f"Testing Task: {idx+1} \t accuracy: {round(acc, 4)}")
             
-                logger.info(f"Epoch: {epoch+1}\tTesting batch: {step+1}\tTest accuracy: {round(np.mean(test_accs), 4)}\n")
-                global_test_acc.append(round(np.mean(test_accs), 4))
+                # logger.info(f"Epoch: {epoch+1}\tTesting batch: {step+1}\tTest accuracy: {round(np.mean(test_accs), 4)}\n")
+                # global_test_acc.append(round(np.mean(test_accs), 4))
 
                 # Report results
                 logger.info("--- Report ---")
@@ -225,8 +225,8 @@ def main():
                 logger.info(global_train_outer_loss)
                 logger.info("--- Training Accuracy ---")
                 logger.info(global_train_acc)
-                logger.info("--- Test Accuracy ---")
-                logger.info(global_test_acc)
+                # logger.info("--- Test Accuracy ---")
+                # logger.info(global_test_acc)
             
                 # Save model
                 # pt_file = get_output_dir(args.output_dir, f"ckpt/pytorch_model_epoch-{epoch+1}_task-{(step+1)*args.outer_batch_size}.bin")
