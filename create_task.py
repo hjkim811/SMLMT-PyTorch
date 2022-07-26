@@ -126,7 +126,7 @@ def vocab_sampler(vocabs, n, num_task, mode='random'):
                 combs.append(comb) 
 
         combs = [(comb, sim_score(comb)) for comb in combs]
-        combs = sorted(combs,key=lambda l:l[1], reverse=True)
+        combs = sorted(combs, key=lambda l:l[1], reverse=True)
 
     else:
         raise ValueError('No such mode available')
