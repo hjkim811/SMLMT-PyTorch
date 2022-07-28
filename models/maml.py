@@ -73,7 +73,7 @@ class Learner(nn.Module):
             # 이 아래: 하나의 task에 대한 것 (support data n*80개 존재)
 
             support = task[0] # 각 label에 대한 데이터 각각 80개씩 있음 / = pseudocode의 D^tr
-            query   = task[1] # 각 label에 대한 데이터 각각 10개씩 있음       
+            query   = task[1] # 각 label에 대한 데이터 각각 10개씩 있음
 
             support_dataloader = DataLoader(support, sampler=RandomSampler(support), batch_size=self.inner_batch_size)
 
